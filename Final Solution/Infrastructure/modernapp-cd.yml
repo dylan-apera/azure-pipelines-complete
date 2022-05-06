@@ -1,0 +1,192 @@
+# ModernApiApp:hhh
+# https://aka.ms/yaml
+name: ModernApp-$(Date:yyyyMMdd)$(Rev:.r)
+trigger: none
+
+variables:
+  mySuffix: '19283570'
+  resourceGroup: 'holDevTestRGlod$(mySuffix)'
+  azureUsername: 'Student1-$(mySuffix)@lodsasdoutlook.onmicrosoft.com'
+  azurePassword: 'Gp1Hh7$#Bk'
+  azureRegion: 'southcentralus'
+  azureContainerRegistryName: 'acrlod$(mySuffix)'
+  ring0ApiAppDns: modernapi-ring0-$(mySuffix)
+  ring0CustomerApiUrl: "http://$(ring0ApiAppDns).$(azureRegion).azurecontainer.io/api/customers"
+  rin0apiContainerName: modernapi-ring0
+  ring0UIAppDns: modernui-ring0-$(mySuffix)
+  ring0CustomerUIUrl: "http://$(ring0UIAppDns).$(azureRegion).azurecontainer.io/customers"
+  ring0uiContainerName: modernui-ring0
+  ring1ApiAppDns: modernapi-ring1-$(mySuffix)
+  ring1CustomerApiUrl: "http://$(ring1ApiAppDns).$(azureRegion).azurecontainer.io/api/customers"
+  ring1apiContainerName: modernapi-ring1
+  ring1UIAppDns: modernui-ring1-$(mySuffix)
+  ring1CustomerUIUrl: "http://$(ring1UIAppDns).$(azureRegion).azurecontainer.io/customers"
+  ring1uiContainerName: modernui-ring1
+
+pool:
+  vmImage: 'windows-2019'
+stages:
+- stage: 'DeployToRing0'
+  displayName: 'Ring 0 Deployment'
+  jobs:
+   - job: DeployInfrastructure
+     displayName: Deploy Azure SQL Server, Customer Database, Customer API, and CRM Front-End
+     variables:
+       sqlServerName: 'sqlsrv$(mySuffix)'
+       sqlServerSku: 'S0'
+       sqlServerUsername: 'devopsadmin'
+       sqlServerPassword: 'Microsoft2018!1'
+       databaseName: 'apidb-ring0'
+       sqlConnectionString: 'Server=tcp:$(sqlServerName).database.windows.net,1433;Initial Catalog=$(databaseName);Persist Security Info=False;User ID=$(sqlServerUsername);Password=$(sqlServerPassword);MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
+       apiContainerImage: '$(azureContainerRegistryName).azurecr.io/modernapi:Latest'
+       apiContainerOsType: Windows
+       apiContainerCpus: 2
+       apiContainerMemory: 3.5
+       apiAppPort: 80
+       apiAppEnvironmentVariables: "ModernApiDBConnectionString=$(sqlConnectionString)"
+       uiContainerImage: '$(azureContainerRegistryName).azurecr.io/modernui:Latest'
+       uiContainerOsType: Windows
+       uiContainerCpus: 2
+       uiContainerMemory: 3.5
+       uiAppPort: 80
+       uiAppEnvironmentVariables: "ApiURL=$(ring0CustomerApiUrl)"
+       
+     steps:
+       - task: Powershell@2
+         displayName: Deploy Azure SQL Server, and Customer Database
+         inputs:
+          pwsh: true
+          targetType: 'filePath' 
+          filePath: DeploySqlDb.ps1
+          arguments: -resourceGroup $(resourceGroup) -azureUsername '$(azureUsername)' -azurePassword '$(azurePassword)' -sqlServerName $(sqlServerName) -sqlServerSku $(sqlServerSku) -sqlServerUsername $(sqlServerUsername) -sqlServerPassword $(sqlServerPassword) -databaseName $(databaseName) -azureRegion 'centralus'
+       - task: SqlDacpacDeploymentOnMachineGroup@0
+         displayName: Load Customer Test Data
+         inputs:
+           TaskType: 'sqlQuery'
+           SqlFile: '$(Build.SourcesDirectory)\TestData.sql'
+           ServerName: '$(sqlServerName).database.windows.net'
+           DatabaseName: '$(databaseName)'
+           AuthScheme: 'sqlServerAuthentication'
+           SqlUsername: '$(sqlServerUsername)'
+           SqlPassword: '$(sqlServerPassword)'
+       - task: Powershell@2
+         displayName: Deploy Customer API
+         inputs:
+          pwsh: true
+          targetType: 'filePath' 
+          filePath: DeployToACI.ps1
+          arguments: -resourceGroup $(resourceGroup) -azureUsername '$(azureUsername)' -azurePassword '$(azurePassword)' -azureRegion $(azureRegion) -containerName $(rin0apiContainerName) -containerImage $(apiContainerImage) -osType $(apiContainerOsType) -memory $(apiContainerMemory) -appDns $(ring0ApiAppDns) -environmentVariables '$(apiAppEnvironmentVariables)' -cpus '$(apiContainerCpus)' -appPort '$(apiAppPort)' -containerRegistry '$(azureContainerRegistryName)'
+       - task: Powershell@2
+         displayName: Deploy CRM Front-End
+         inputs:
+          pwsh: true
+          targetType: 'filePath' 
+          filePath: DeployToACI.ps1
+          arguments: -resourceGroup $(resourceGroup) -azureUsername '$(azureUsername)' -azurePassword '$(azurePassword)' -azureRegion $(azureRegion) -containerName $(ring0uiContainerName) -containerImage $(uiContainerImage) -osType $(apiContainerOsType) -memory $(uiContainerMemory) -appDns $(ring0UIAppDns) -environmentVariables '$(uiAppEnvironmentVariables)' -cpus '$(uiContainerCpus)' -appPort '$(uiAppPort)' -containerRegistry '$(azureContainerRegistryName)'
+      
+- stage: 'ValidateRing0'
+  dependsOn: 'DeployToRing0'
+  displayName: Ring 0 Validation
+  jobs:
+    - job: ValidateRing0
+      steps:
+       - task: oneluckidevWebSmokeTest@1
+         displayName: Verify Customer API Returns Data
+         inputs:
+           url: '$(ring0CustomerApiUrl)'
+           expectedReturnCode: '200'
+           retryAttemptCount: '3'
+           strictSSL: true
+           retryDelay: '1000'
+
+       - task: oneluckidevWebSmokeTest@1
+         displayName: Verify CRM Front-End Returns Data
+         inputs:
+           url: '$(ring0CustomerUIUrl)'
+           expectedReturnCode: '200'
+           retryAttemptCount: '3'
+           strictSSL: true
+           retryDelay: '1000'
+
+- stage: 'DeployToRing1'
+  displayName: 'Ring 1 Deployment'
+  jobs:
+   - job: DeployInfrastructure
+     displayName: Deploy Azure SQL Server, Customer Database, Customer API, and CRM Front-End
+     variables:
+       sqlServerName: 'sqlsrv$(mySuffix)'
+       sqlServerSku: 'S0'
+       sqlServerUsername: 'devopsadmin'
+       sqlServerPassword: 'Microsoft2018!1'
+       databaseName: 'apidb-ring1'
+       sqlConnectionString: 'Server=tcp:$(sqlServerName).database.windows.net,1433;Initial Catalog=$(databaseName);Persist Security Info=False;User ID=$(sqlServerUsername);Password=$(sqlServerPassword);MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'
+       apiContainerName: modernapi
+       apiContainerImage: '$(azureContainerRegistryName).azurecr.io/modernapi:Latest'
+       apiContainerOsType: Windows
+       apiContainerCpus: 2
+       apiContainerMemory: 3.5
+       apiAppPort: 80
+       apiAppEnvironmentVariables: "ModernApiDBConnectionString=$(sqlConnectionString)"
+       uiContainerName: modernui
+       uiContainerImage: '$(azureContainerRegistryName).azurecr.io/modernui:Latest'
+       uiContainerOsType: Windows
+       uiContainerCpus: 2
+       uiContainerMemory: 3.5
+       uiAppPort: 80
+       uiAppEnvironmentVariables: "ApiURL=$(ring1CustomerApiUrl)"
+       
+     steps:
+       - task: Powershell@2
+         displayName: Deploy Azure SQL Server, and Customer Database
+         inputs:
+          pwsh: true
+          targetType: 'filePath' 
+          filePath: DeploySqlDb.ps1
+          arguments: -resourceGroup $(resourceGroup) -azureUsername '$(azureUsername)' -azurePassword '$(azurePassword)' -sqlServerName $(sqlServerName) -sqlServerSku $(sqlServerSku) -sqlServerUsername $(sqlServerUsername) -sqlServerPassword $(sqlServerPassword) -databaseName $(databaseName) -azureRegion 'centralus'
+       - task: SqlDacpacDeploymentOnMachineGroup@0
+         displayName: Load Customer Test Data
+         inputs:
+           TaskType: 'sqlQuery'
+           SqlFile: '$(Build.SourcesDirectory)\TestData.sql'
+           ServerName: '$(sqlServerName).database.windows.net'
+           DatabaseName: '$(databaseName)'
+           AuthScheme: 'sqlServerAuthentication'
+           SqlUsername: '$(sqlServerUsername)'
+           SqlPassword: '$(sqlServerPassword)'
+       - task: Powershell@2
+         displayName: Deploy Customer API
+         inputs:
+          pwsh: true
+          targetType: 'filePath' 
+          filePath: DeployToACI.ps1
+          arguments: -resourceGroup '$(resourceGroup)' -azureUsername '$(azureUsername)' -azurePassword '$(azurePassword)' -azureRegion '$(azureRegion)' -containerName '$(ring1apiContainerName)' -containerImage '$(apiContainerImage)' -osType '$(apiContainerOsType)' -memory '$(apiContainerMemory)' -appDns '$(ring1ApiAppDns)' -environmentVariables '$(apiAppEnvironmentVariables)' -cpus '$(apiContainerCpus)' -appPort '$(apiAppPort)' -containerRegistry '$(azureContainerRegistryName)'
+       - task: Powershell@2
+         displayName: Deploy CRM Front-End
+         inputs:
+          pwsh: true
+          targetType: 'filePath' 
+          filePath: DeployToACI.ps1
+          arguments: -resourceGroup '$(resourceGroup)' -azureUsername '$(azureUsername)' -azurePassword '$(azurePassword)' -azureRegion '$(azureRegion)' -containerName '$(ring1uiContainerName)' -containerImage '$(uiContainerImage)' -osType '$(apiContainerOsType)' -memory '$(uiContainerMemory)' -appDns '$(ring1UIAppDns)' -environmentVariables '$(uiAppEnvironmentVariables)' -cpus '$(uiContainerCpus)' -appPort '$(uiAppPort)' -containerRegistry '$(azureContainerRegistryName)'
+
+- stage: 'ValidateRing1'
+  dependsOn: 'DeployToRing1'
+  displayName: Ring 1 Validation
+  jobs:
+    - job: ValidateRing1
+      steps:
+       - task: oneluckidevWebSmokeTest@1
+         displayName: Verify Customer API Returns Data
+         inputs:
+           url: '$(ring1CustomerApiUrl)'
+           expectedReturnCode: '200'
+           retryAttemptCount: '3'
+           strictSSL: true
+           retryDelay: '1000'
+       - task: oneluckidevWebSmokeTest@1
+         displayName: Verify CRM Front-End Returns Data
+         inputs:
+           url: '$(ring1CustomerUIUrl)'
+           expectedReturnCode: '200'
+           retryAttemptCount: '3'
+           strictSSL: true
+           retryDelay: '1000'

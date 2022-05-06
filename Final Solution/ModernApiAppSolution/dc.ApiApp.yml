@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  
+  modernapiapp:
+    image: modernapiapp
+    build:
+      context: .
+      dockerfile: ModernApiApp.Dockerfile
+    ports:
+    - 8080:80
+    depends_on:
+      - modernapiapp.database
+  
+  modernapiapp.database:
+    image: modernapiapp.database
+    build:
+      context: ModernApiApp.Database
+      dockerfile: ModernApiApp.Database.Dockerfile
+    ports:
+      - 5434:1433
